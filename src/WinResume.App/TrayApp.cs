@@ -37,7 +37,7 @@ sealed class TrayApp : IDisposable
         icon = new NotifyIcon { Icon = SystemIcons.Application, Text = "WinResume", ContextMenuStrip = menu, Visible = true };
 
         // Right after sign-in many apps are still starting themselves, so wait a little before offering to restore.
-        signInTimer = new System.Windows.Forms.Timer { Interval = 15_000 };
+        signInTimer = new System.Windows.Forms.Timer { Interval = 10_000 };
         signInTimer.Tick += (_, _) => { signInTimer.Stop(); AskAndRestore(askFirst: true); };
         var saved = SessionStore.Load();
         SessionStore.Log(saved is null ? "started; no saved session" : $"started; saved session found: {SessionFlow.Describe(saved)}");
@@ -63,9 +63,27 @@ sealed class TrayApp : IDisposable
         // Restoring drives other apps' windows, so keep it off the UI thread.
         Task.Run(() =>
         {
-            try { SessionFlow.RestoreSession(snapshot, SessionStore.LoadSettings(), SessionStore.Log); }
+            try
+            {
+                var summary = SessionFlow.RestoreSession(snapshot, SessionStore.LoadSettings(), SessionStore.Log);
+                // a dialog like the restore prompt, so it stays until read (a tray balloon can vanish or be suppressed)
+                window.BeginInvoke(() => ShowSummary(summary));
+            }
             catch (Exception e) { SessionStore.Log("restore failed: " + e); }
         });
+    }
+
+    static void ShowSummary(RestoreSummary summary)
+    {
+        if (summary.NeedAttention == 0)
+        {
+            MessageBox.Show(summary.Message, "WinResume", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        var answer = MessageBox.Show(summary.Message + "\n\nOpen the log file?", "WinResume",
+            MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (answer == DialogResult.Yes)
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(SessionStore.LogFile) { UseShellExecute = true });
     }
 
     static bool IsAutostart()

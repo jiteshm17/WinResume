@@ -4,10 +4,10 @@ using static WinResume.Core.Native;
 namespace WinResume.Core;
 
 /// <summary>
-/// File Explorer (Windows 11) exposes only the active tab of a window through Shell.Application,
-/// so tabs are captured by selecting each tab with UI Automation and reading the address bar.
-/// Restore sends no keystrokes: it opens the first folder as a window, then for each further tab
-/// clicks the window's own "Add New Tab" button and navigates that tab through Shell.Application.
+/// File Explorer (Windows 11) lists every tab of a window as its own Shell.Application entry (all sharing the
+/// window's HWND), and each entry can be read and navigated. Capture and restore therefore never select tabs,
+/// move focus or send keys: capture reads the entries, restore clicks the window's own "Add New Tab" button
+/// and navigates the new tab's entry. UI Automation is used only to read the tab order and which tab is active.
 /// </summary>
 public static class ExplorerTabs
 {
@@ -39,63 +39,100 @@ public static class ExplorerTabs
 
     // ---- capture ------------------------------------------------------
 
-    /// <summary>Returns tab paths in order plus the index of the originally active tab.</summary>
+    /// <summary>
+    /// One line for the log: every Explorer window that exists (even hidden or cloaked ones) and how many tabs
+    /// Shell reports for it. Written at each shutdown so a missing Explorer entry can be explained afterwards.
+    /// </summary>
+    public static string Describe()
+    {
+        try
+        {
+            var windows = new List<IntPtr>();
+            EnumWindows((h, _) => { if (IsExplorerWindow(h)) windows.Add(h); return true; }, IntPtr.Zero);
+            if (windows.Count == 0) return "explorer: no Explorer windows exist";
+            var parts = windows.Select(h =>
+            {
+                DwmGetWindowAttribute(h, DWMWA_CLOAKED, out var cloaked, sizeof(int));
+                return $"0x{h.ToInt64():X} visible={IsWindowVisible(h)} cloaked={cloaked != 0} shellTabs={ShellTabs(h).Count} uiaTabs={TabCount(h)}";
+            });
+            return "explorer: " + string.Join("; ", parts);
+        }
+        catch (Exception e) { return "explorer: could not inspect windows: " + e.Message; }
+    }
+
+    /// <summary>
+    /// Returns tab locations in order plus the index of the active tab. Purely passive: no tab is selected
+    /// and nothing is focused, so the user's windows do not move or flicker.
+    /// </summary>
     public static (List<string> Paths, int Active) Capture(IntPtr hwnd)
     {
-        var paths = new List<string>();
+        var entries = ShellTabs(hwnd).Select(t => (t.Title, Path: (string?)LocationOf(t.Window))).ToList();
+        var names = new List<string>();
         int active = 0;
-        AutomationElement root;
-        try { root = AutomationElement.FromHandle(hwnd); } catch { return (paths, 0); }
+        try
+        {
+            var tabs = RealTabs(AutomationElement.FromHandle(hwnd));
+            for (int i = 0; i < tabs.Count; i++)
+            {
+                names.Add(tabs[i].Current.Name);
+                if (tabs[i].TryGetCurrentPattern(SelectionItemPattern.Pattern, out var p) && p is SelectionItemPattern sel
+                    && sel.Current.IsSelected) active = i;
+            }
+        }
+        catch { /* order falls back to the order Shell lists the tabs in */ }
 
-        var tabs = RealTabs(root);
-        if (tabs.Count == 0)
-        {
-            var only = ActivePath(hwnd);
-            if (only is not null) paths.Add(only);
-            return (paths, 0);
-        }
-
-        for (int i = 0; i < tabs.Count; i++)
-        {
-            if (tabs[i].TryGetCurrentPattern(SelectionItemPattern.Pattern, out var p) && p is SelectionItemPattern sel
-                && sel.Current.IsSelected) active = i;
-        }
-        // The address bar only shows the real path while it has focus, so each tab is
-        // selected, the address bar focused and read, then focus returns to the tab item.
-        var addressBar = FindAddressBar(root); // looked up once: searching the window again for every tab is slow
-        for (int i = 0; i < tabs.Count; i++)
-        {
-            if (!tabs[i].TryGetCurrentPattern(SelectionItemPattern.Pattern, out var p)) continue;
-            ((SelectionItemPattern)p).Select();
-            Thread.Sleep(SettleAfterSelect);
-            var value = ReadAddressBar(addressBar);
-            try { tabs[i].SetFocus(); } catch { }
-            if (value is not null) paths.Add(NormalizeLocation(value));
-        }
-        // put the user's original tab back in front
-        if (tabs[active].TryGetCurrentPattern(SelectionItemPattern.Pattern, out var back))
-            ((SelectionItemPattern)back).Select();
+        var paths = OrderByTabStrip(entries, names).Where(p => p is not null).Select(p => NormalizeLocation(p!)).ToList();
         return (paths, Math.Min(active, Math.Max(0, paths.Count - 1)));
     }
 
-    /// <summary>Pauses (ms) after selecting a tab and after focusing the address bar, so the address has updated before it is read.</summary>
-    internal static int SettleAfterSelect = 150, SettleAfterFocus = 120;
-
-    static AutomationElement? FindAddressBar(AutomationElement root) =>
-        root.FindFirst(TreeScope.Descendants, new AndCondition(
-            new PropertyCondition(AutomationElement.NameProperty, "Address Bar"),
-            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit)));
-
-    static string? ReadAddressBar(AutomationElement? edit)
+    /// <summary>
+    /// Shell lists tabs in creation order; the tab strip can have been rearranged by dragging. Orders the entries
+    /// like the strip by matching each tab's name to the entry's folder title. Entries that match nothing keep
+    /// their place at the end.
+    /// </summary>
+    public static List<string?> OrderByTabStrip(IReadOnlyList<(string Title, string? Path)> entries, IReadOnlyList<string> tabNames)
     {
-        if (edit is null) return null;
+        var left = entries.ToList();
+        var ordered = new List<string?>();
+        foreach (var name in tabNames)
+        {
+            var i = left.FindIndex(e => string.Equals(e.Title, name, StringComparison.OrdinalIgnoreCase));
+            if (i < 0) continue;
+            ordered.Add(left[i].Path);
+            left.RemoveAt(i);
+        }
+        ordered.AddRange(left.Select(e => e.Path));
+        return ordered;
+    }
+
+    static string? LocationOf(dynamic window)
+    {
+        try { return (string)window.Document.Folder.Self.Path; }
+        catch { return null; }
+    }
+
+    /// <summary>One Shell.Application entry per tab of the window, in creation order.</summary>
+    static List<(string Title, dynamic Window)> ShellTabs(IntPtr hwnd)
+    {
+        var result = new List<(string, dynamic)>();
+        var type = Type.GetTypeFromProgID("Shell.Application");
+        if (type is null) return result;
         try
         {
-            edit.SetFocus();
-            Thread.Sleep(SettleAfterFocus);
-            return ((ValuePattern)edit.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
+            dynamic shell = Activator.CreateInstance(type)!;
+            foreach (var w in shell.Windows())
+            {
+                try
+                {
+                    if ((long)w.HWND != hwnd.ToInt64()) continue;
+                    string title = w.Document.Folder.Title;
+                    result.Add((title, w));
+                }
+                catch { /* non-Explorer shell window, or a tab still loading */ }
+            }
         }
-        catch { return null; }
+        catch { }
+        return result;
     }
 
     static readonly Dictionary<string, string> KnownFolders = new(StringComparer.OrdinalIgnoreCase)
@@ -112,36 +149,17 @@ public static class ExplorerTabs
         ["Recycle Bin"] = "shell:RecycleBinFolder",
     };
 
-    /// <summary>The address bar shows only a display name for known folders; turn those into shell: names.</summary>
+    const string HomeClsid = "::{F874310E-B6B7-47DC-BC84-B9E6B38F5903}";
+
+    /// <summary>Turns display names ("Downloads") and "::{CLSID}" locations into names Explorer can open (shell:...).</summary>
     public static string NormalizeLocation(string value)
     {
         var v = value.Trim();
-        return KnownFolders.TryGetValue(v, out var shell) ? shell : v;
-    }
-
-    /// <summary>Path of the window's active tab via Shell.Application.</summary>
-    static string? ActivePath(IntPtr hwnd)
-    {
-        var w = ShellWindow(hwnd);
-        try { return w is null ? null : (string)w.Document.Folder.Self.Path; }
-        catch { return null; }
-    }
-
-    static dynamic? ShellWindow(IntPtr hwnd)
-    {
-        var type = Type.GetTypeFromProgID("Shell.Application");
-        if (type is null) return null;
-        dynamic shell = Activator.CreateInstance(type)!;
-        try
-        {
-            foreach (var w in shell.Windows())
-            {
-                try { if ((long)w.HWND == hwnd.ToInt64()) return w; }
-                catch { /* non-Explorer shell window */ }
-            }
-        }
-        catch { }
-        return null;
+        if (KnownFolders.TryGetValue(v, out var shell)) return shell;
+        // Folders without a file-system path (Home, This PC, ...) come back from Shell as "::{CLSID}"
+        if (v.StartsWith("::{", StringComparison.Ordinal))
+            return v.StartsWith(HomeClsid, StringComparison.OrdinalIgnoreCase) ? KnownFolders["Home"] : "shell:" + v;
+        return v;
     }
 
     // ---- restore ------------------------------------------------------
@@ -187,46 +205,15 @@ public static class ExplorerTabs
         if (add is null || !add.TryGetCurrentPattern(InvokePattern.Pattern, out var p)) return false;
         ((InvokePattern)p).Invoke();
 
-        for (int w = 0; w < 20 && TabCount(hwnd) <= count; w++) Thread.Sleep(150);
-        if (TabCount(hwnd) <= count) return false;
-        Thread.Sleep(400); // the new tab becomes the active one
-
-        // Shell.Application can only navigate a window's first tab, so the address bar is used.
-        // The path is set through UI Automation (no typing); the only key sent is a single Enter,
-        // and only after confirming Explorer is the foreground window.
-        var edit = root.FindFirst(TreeScope.Descendants, new AndCondition(
-            new PropertyCondition(AutomationElement.NameProperty, "Address Bar"),
-            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit)));
-        if (edit is null) return false;
-        try
-        {
-            if (!BringToForeground(hwnd)) { log?.Invoke("explorer: could not bring window to front, not sending keys"); return false; }
-            edit.SetFocus();
-            Thread.Sleep(250);
-            ((ValuePattern)edit.GetCurrentPattern(ValuePattern.Pattern)).SetValue(path);
-            Thread.Sleep(250);
-            if (GetForegroundWindow() != hwnd) { log?.Invoke("explorer: window lost focus, not sending Enter"); return false; }
-            keybd_event(VK_RETURN, 0, 0, UIntPtr.Zero);
-            keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        }
+        // The new tab shows up as one more Shell entry; it is the newest, so the last one. Navigating the entry
+        // sends the tab there without focusing the window or typing into it.
+        List<(string Title, dynamic Window)> tabs = new();
+        for (int w = 0; w < 30 && (tabs = ShellTabs(hwnd)).Count <= count; w++) Thread.Sleep(150);
+        if (tabs.Count <= count) return false;
+        try { tabs[^1].Window.Navigate2(path); }
         catch (Exception e) { log?.Invoke($"explorer: navigate failed: {e.Message}"); return false; }
-        Thread.Sleep(900);
+        Thread.Sleep(400);
         return true;
-    }
-
-    static bool BringToForeground(IntPtr hwnd)
-    {
-        for (int attempt = 0; attempt < 3; attempt++)
-        {
-            ShowWindow(hwnd, SW_RESTORE);
-            // a synthetic Alt press lets SetForegroundWindow succeed from a background process
-            keybd_event(VK_MENU, 0, 0, UIntPtr.Zero);
-            SetForegroundWindow(hwnd);
-            keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-            Thread.Sleep(250);
-            if (GetForegroundWindow() == hwnd) return true;
-        }
-        return false;
     }
 
     static void SelectTab(IntPtr hwnd, int index)

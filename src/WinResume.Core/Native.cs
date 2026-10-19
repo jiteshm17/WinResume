@@ -35,17 +35,10 @@ internal static class Native
     }
 
     public const int SW_RESTORE = 9;
-    public const byte VK_RETURN = 0x0D;
-    public const byte VK_MENU = 0x12;
-    public const uint KEYEVENTF_KEYUP = 2;
-
-    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int max);
     [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumWindowsProc cb, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int cmd);
-    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     public static extern int GetApplicationUserModelId(IntPtr hProcess, ref int length, StringBuilder sb);
 
