@@ -22,7 +22,7 @@ sign in again.
 4. Look for the WinResume icon in the system tray (bottom right, possibly behind the `^`). Right-click it and tick
    **Start with Windows**, so it is running next time you shut down.
 
-That's it. From then on, shut down or restart as usual. At the next sign-in WinResume waits about 15 seconds for
+That's it. From then on, shut down or restart as usual. At the next sign-in WinResume waits about 10 seconds for
 your other apps to start, then asks whether to restore your session.
 
 > Don't move or delete the exe afterwards without untick-and-retick of "Start with Windows", because Windows
@@ -119,6 +119,8 @@ version, releases are marked **pre-release**.
 
 ## Troubleshooting
 
+**"Closing apps" screen at shutdown.** Windows may show its own "Closing N apps and restarting" screen listing apps that have not closed yet (Excel and File Explorer often appear). That is normal Windows behaviour, not a WinResume problem, and WinResume has already saved your session by then. Wait, or click **Restart anyway**. If you click **Cancel**, the shutdown is called off and the saved session is discarded.
+
 If something did not come back, the log says why. Open it from the tray menu (**Open data folder**, then `log.txt`), or
 send that file to whoever is helping you. It contains one timestamped line per step and no window titles: when the
 session ended and how long saving took, whether a saved session was found at sign-in, each app as restored or skipped
@@ -142,6 +144,7 @@ compares what is open with the baseline.
 
 ## Known gaps
 
+- Chrome and Edge: WinResume reopens each profile that had windows open and lets the browser restore its own windows and tabs. Several windows in one profile are expected to come back, but this has not been tested through a real shutdown yet.
 - Running programs are not restarted (a tab's last command is put in history so the up arrow recalls it).
 - Windows Terminal tabs running plain PowerShell report their start folder; an optional prompt hook
   (`scripts/terminal-prompt-hook.ps1`) gives the exact one.

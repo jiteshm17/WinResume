@@ -40,6 +40,27 @@ public static class ExplorerTabs
     // ---- capture ------------------------------------------------------
 
     /// <summary>
+    /// One line for the log: every Explorer window that exists (even hidden or cloaked ones) and how many tabs
+    /// Shell reports for it. Written at each shutdown so a missing Explorer entry can be explained afterwards.
+    /// </summary>
+    public static string Describe()
+    {
+        try
+        {
+            var windows = new List<IntPtr>();
+            EnumWindows((h, _) => { if (IsExplorerWindow(h)) windows.Add(h); return true; }, IntPtr.Zero);
+            if (windows.Count == 0) return "explorer: no Explorer windows exist";
+            var parts = windows.Select(h =>
+            {
+                DwmGetWindowAttribute(h, DWMWA_CLOAKED, out var cloaked, sizeof(int));
+                return $"0x{h.ToInt64():X} visible={IsWindowVisible(h)} cloaked={cloaked != 0} shellTabs={ShellTabs(h).Count} uiaTabs={TabCount(h)}";
+            });
+            return "explorer: " + string.Join("; ", parts);
+        }
+        catch (Exception e) { return "explorer: could not inspect windows: " + e.Message; }
+    }
+
+    /// <summary>
     /// Returns tab locations in order plus the index of the active tab. Purely passive: no tab is selected
     /// and nothing is focused, so the user's windows do not move or flicker.
     /// </summary>

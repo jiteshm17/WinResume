@@ -37,7 +37,7 @@ sealed class TrayApp : IDisposable
         icon = new NotifyIcon { Icon = SystemIcons.Application, Text = "WinResume", ContextMenuStrip = menu, Visible = true };
 
         // Right after sign-in many apps are still starting themselves, so wait a little before offering to restore.
-        signInTimer = new System.Windows.Forms.Timer { Interval = 15_000 };
+        signInTimer = new System.Windows.Forms.Timer { Interval = 10_000 };
         signInTimer.Tick += (_, _) => { signInTimer.Stop(); AskAndRestore(askFirst: true); };
         var saved = SessionStore.Load();
         SessionStore.Log(saved is null ? "started; no saved session" : $"started; saved session found: {SessionFlow.Describe(saved)}");

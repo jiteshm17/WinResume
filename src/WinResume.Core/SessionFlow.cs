@@ -17,6 +17,7 @@ public static class SessionFlow
         {
             try
             {
+                log(ExplorerTabs.Describe());
                 var snapshot = Capture.TakeSnapshot(includeExplorer: true, includeTerminal: settings.RestoreTerminal);
                 SessionStore.Save(Without(snapshot, settings));
                 log($"saved snapshot: {snapshot.Apps.Count} apps, {snapshot.Terminal?.Tabs.Count ?? 0} terminal tabs, {watch.ElapsedMilliseconds} ms");
