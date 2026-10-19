@@ -107,8 +107,8 @@ public class SnapshotTests
 
 public class RestoreSummaryTests
 {
-    static RestoreResult Result(bool launched, string? note = null, bool partial = false) =>
-        new(new AppEntry(), launched, false, note) { Partial = partial };
+    static RestoreResult Result(bool launched, string? note = null, bool partial = false, string exe = @"C:\x\app.exe") =>
+        new(new AppEntry { ExePath = exe }, launched, false, note) { Partial = partial };
 
     [Fact]
     public void Counts_restored_skipped_and_problems_separately()
@@ -117,18 +117,31 @@ public class RestoreSummaryTests
         {
             Result(true), Result(true, "Chromium restores its own windows"),
             Result(false, "Starts itself at sign-in"), Result(false, "Already running"),
-            Result(false, "Not inspectable (probably elevated)"), Result(true, "Not every tab could be restored", partial: true),
+            Result(false, "Not inspectable (probably elevated)", exe: ""),
+            Result(true, "Not every tab could be restored", partial: true, exe: @"C:\Windows\explorer.exe"),
         });
-        Assert.Equal(new RestoreSummary(2, 2, 2), summary);
-        Assert.Contains("2 restored", summary.LogLine);
+        Assert.Equal((2, 2, 2), (summary.Restored, summary.Skipped, summary.NeedAttention));
         Assert.Contains("2 need attention", summary.LogLine);
+        Assert.Contains("An app: Not inspectable (probably elevated)", summary.Problems);
+        Assert.Contains("explorer: Not every tab could be restored", summary.Problems);
     }
 
     [Fact]
-    public void Message_mentions_problems_only_when_there_are_some()
+    public void Message_for_a_clean_restore_has_no_problem_section()
     {
-        Assert.Equal("Restored 1 app.", new RestoreSummary(1, 0, 0).Message);
-        Assert.DoesNotContain("could not", new RestoreSummary(5, 1, 0).Message);
-        Assert.Contains("1 could not be fully restored", new RestoreSummary(5, 1, 1).Message);
+        var message = RestoreSummary.From(new[] { Result(true), Result(false, "Already running") }).Message;
+        Assert.Equal("Restored 1 app. 1 was already running or start by themselves.", message);
+    }
+
+    [Fact]
+    public void Message_for_a_partial_restore_names_the_apps()
+    {
+        var message = RestoreSummary.From(new[]
+        {
+            Result(true),
+            Result(true, "Not every tab could be restored", partial: true, exe: @"C:\Windows\explorer.exe"),
+        }).Message;
+        Assert.Contains("1 could not be fully restored", message);
+        Assert.Contains("explorer: Not every tab could be restored", message);
     }
 }

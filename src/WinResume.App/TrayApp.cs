@@ -66,11 +66,24 @@ sealed class TrayApp : IDisposable
             try
             {
                 var summary = SessionFlow.RestoreSession(snapshot, SessionStore.LoadSettings(), SessionStore.Log);
-                window.BeginInvoke(() => icon.ShowBalloonTip(8000, "WinResume", summary.Message,
-                    summary.NeedAttention > 0 ? ToolTipIcon.Warning : ToolTipIcon.Info));
+                // a dialog like the restore prompt, so it stays until read (a tray balloon can vanish or be suppressed)
+                window.BeginInvoke(() => ShowSummary(summary));
             }
             catch (Exception e) { SessionStore.Log("restore failed: " + e); }
         });
+    }
+
+    static void ShowSummary(RestoreSummary summary)
+    {
+        if (summary.NeedAttention == 0)
+        {
+            MessageBox.Show(summary.Message, "WinResume", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        var answer = MessageBox.Show(summary.Message + "\n\nOpen the log file?", "WinResume",
+            MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (answer == DialogResult.Yes)
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(SessionStore.LogFile) { UseShellExecute = true });
     }
 
     static bool IsAutostart()

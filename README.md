@@ -54,8 +54,7 @@ Download the newer zip, exit WinResume from the tray menu, and replace the exe.
 Apps that Windows already starts for you at sign-in (the Startup apps list, including the Task Manager on/off
 switch) are left alone, as are apps that are already running.
 
-When it has finished, a tray notification tells you how many apps came back (for example "Restored 8 apps. 2 already
-running or starting by themselves.") and the same summary is written to the log.
+When it has finished, a message box tells you what happened: "Restored 8 apps. 2 were already running or start by themselves.", or, if something did not fully come back, a list of which apps and why, with an offer to open the log. The same summary is written to the log.
 
 **Tip:** turn off *Settings > Accounts > Sign-in options > "Automatically save my restartable apps and restart them
 when I sign back in"*. Windows' own restore overlaps with this app for Chrome and Explorer.

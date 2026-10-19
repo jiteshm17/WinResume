@@ -10,31 +10,40 @@ public sealed record RestoreResult(AppEntry App, bool Launched, bool Placed, str
     public bool Partial { get; init; }
 }
 
-/// <summary>What a restore did, in numbers, for the log and for the notification shown to the user.</summary>
-public sealed record RestoreSummary(int Restored, int Skipped, int NeedAttention)
+/// <summary>What a restore did, for the log and for the message shown to the user when it finishes.</summary>
+public sealed record RestoreSummary(int Restored, int Skipped, IReadOnlyList<string> Problems)
 {
+    public int NeedAttention => Problems.Count;
+
     public static RestoreSummary From(IEnumerable<RestoreResult> results)
     {
-        int restored = 0, skipped = 0, attention = 0;
+        int restored = 0, skipped = 0;
+        var problems = new List<string>();
         foreach (var r in results)
         {
-            if (r.Partial || (!r.Launched && !Restore.IsSkippedOnPurpose(r.Note))) attention++;
+            if (r.Partial || (!r.Launched && !Restore.IsSkippedOnPurpose(r.Note)))
+            {
+                var name = Path.GetFileNameWithoutExtension(r.App.ExePath);
+                problems.Add($"{(name.Length > 0 ? name : "An app")}: {r.Note ?? "not fully restored"}");
+            }
             else if (r.Launched) restored++;
             else skipped++;
         }
-        return new RestoreSummary(restored, skipped, attention);
+        return new RestoreSummary(restored, skipped, problems);
     }
 
     public string LogLine => $"restore complete: {Restored} restored, {Skipped} skipped (already running or start themselves), {NeedAttention} need attention";
 
+    /// <summary>The text of the dialog shown when the restore has finished; problems are listed by app.</summary>
     public string Message
     {
         get
         {
             var text = Restored == 1 ? "Restored 1 app." : $"Restored {Restored} apps.";
-            if (Skipped > 0) text += $" {Skipped} already running or starting by themselves.";
-            if (NeedAttention > 0) text += $" {NeedAttention} could not be fully restored; see the log in the data folder.";
-            return text;
+            if (Skipped > 0) text += $" {Skipped} {(Skipped == 1 ? "was" : "were")} already running or start by themselves.";
+            if (NeedAttention == 0) return text;
+            return text + $"\n\n{NeedAttention} could not be fully restored:\n"
+                + string.Join("\n", Problems.Select(p => "  • " + p));
         }
     }
 }
