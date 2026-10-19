@@ -100,6 +100,27 @@ dotnet publish src/WinResume.App -c Release -r win-x64 --self-contained true -p:
 `scripts/` has the test scripts, including `kill-and-restore.ps1` (close apps, restore, compare) and
 `baseline-before-restart.ps1` / `verify-after-restart.ps1` for testing a real restart.
 
+## Troubleshooting and debug paths
+
+Everything WinResume writes is under `%LocalAppData%\WinResume` (open it from the tray menu: **Open data folder**).
+
+| Path | What it is |
+|---|---|
+| `%LocalAppData%\WinResume\log.txt` | **The debug log.** One timestamped line per step: "session ending", what was captured and how long it took, "started; saved session found", the restore prompt, and each app as restored or skipped (with the reason). Start here. |
+| `%LocalAppData%\WinResume\last-session.json` | The saved session. Exists only between a shutdown and the next restore. |
+| `%LocalAppData%\WinResume\settings.json` | Pause, terminal switch, excluded apps. |
+| `%LocalAppData%\WinResume\test\` | Written by the test scripts: `baseline.json` (before) and `after.json` (after). |
+| `%LocalAppData%\Packages\Microsoft.WindowsTerminal_*\LocalState\state.json` | Windows Terminal's saved layout, which WinResume patches. `state.json.winresume-backup` next to it is the copy from before the last patch. |
+| `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value `WinResume` | The "Start with Windows" entry. |
+
+**Debugging a restart.** Before restarting, run `scripts\baseline-before-restart.ps1`. After signing in and answering
+the prompt, wait about a minute and run `scripts\verify-after-restart.ps1`; it prints the tail of `log.txt`, then compares
+what is open with the baseline, item by item (apps, Chrome tabs, Explorer windows, Office documents, terminal tabs).
+
+**Resuming a debugging session with Claude Code.** In a new session, say that the latest restart result is in
+`%LocalAppData%\WinResume\log.txt` and `%LocalAppData%\WinResume\test\`, paste the output of
+`scripts\verify-after-restart.ps1`, and ask it to work out what went wrong. `CLAUDE.md` explains the project to it.
+
 ## Releases
 
 Releases are built by GitHub Actions from the tagged source, so the zip is not built on anyone's laptop. Pushing a tag
