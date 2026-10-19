@@ -51,6 +51,33 @@ public class ExplorerTabsTests
     public void Known_folder_names_become_shell_paths(string input, string expected) =>
         Assert.Equal(expected, ExplorerTabs.NormalizeLocation(input));
 
+    [Theory]
+    [InlineData("::{F874310E-B6B7-47DC-BC84-B9E6B38F5903}", "shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}")]
+    [InlineData("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", "shell:::{20D04FE0-3AEA-1069-A2D8-08002B30309D}")]
+    public void Clsid_locations_become_shell_paths(string input, string expected) =>
+        Assert.Equal(expected, ExplorerTabs.NormalizeLocation(input));
+
+    [Fact]
+    public void Tabs_follow_the_tab_strip_not_creation_order()
+    {
+        var entries = new List<(string Title, string? Path)> { ("A", @"C:\a"), ("B", @"C:\b"), ("C", @"C:\c") };
+        Assert.Equal(new[] { @"C:\c", @"C:\a", @"C:\b" }, ExplorerTabs.OrderByTabStrip(entries, new[] { "C", "A", "B" }));
+    }
+
+    [Fact]
+    public void Same_named_tabs_keep_their_relative_order()
+    {
+        var entries = new List<(string Title, string? Path)> { ("Videos", @"C:\x\Videos"), ("Videos", @"D:\Videos") };
+        Assert.Equal(new[] { @"C:\x\Videos", @"D:\Videos" }, ExplorerTabs.OrderByTabStrip(entries, new[] { "Videos", "Videos" }));
+    }
+
+    [Fact]
+    public void Unmatched_entries_are_kept_after_the_matched_ones()
+    {
+        var entries = new List<(string Title, string? Path)> { ("A", @"C:\a"), ("B", @"C:\b") };
+        Assert.Equal(new[] { @"C:\b", @"C:\a" }, ExplorerTabs.OrderByTabStrip(entries, new[] { "B", "Other" }));
+        Assert.Equal(new[] { @"C:\a", @"C:\b" }, ExplorerTabs.OrderByTabStrip(entries, Array.Empty<string>()));
+    }
 }
 
 public class SnapshotTests
@@ -75,5 +102,33 @@ public class SnapshotTests
         var back = Snapshot.FromJson(snap.ToJson());
         Assert.Single(back.Apps);
         Assert.Equal(snap.Apps[0], back.Apps[0]);
+    }
+}
+
+public class RestoreSummaryTests
+{
+    static RestoreResult Result(bool launched, string? note = null, bool partial = false) =>
+        new(new AppEntry(), launched, false, note) { Partial = partial };
+
+    [Fact]
+    public void Counts_restored_skipped_and_problems_separately()
+    {
+        var summary = RestoreSummary.From(new[]
+        {
+            Result(true), Result(true, "Chromium restores its own windows"),
+            Result(false, "Starts itself at sign-in"), Result(false, "Already running"),
+            Result(false, "Not inspectable (probably elevated)"), Result(true, "Not every tab could be restored", partial: true),
+        });
+        Assert.Equal(new RestoreSummary(2, 2, 2), summary);
+        Assert.Contains("2 restored", summary.LogLine);
+        Assert.Contains("2 need attention", summary.LogLine);
+    }
+
+    [Fact]
+    public void Message_mentions_problems_only_when_there_are_some()
+    {
+        Assert.Equal("Restored 1 app.", new RestoreSummary(1, 0, 0).Message);
+        Assert.DoesNotContain("could not", new RestoreSummary(5, 1, 0).Message);
+        Assert.Contains("1 could not be fully restored", new RestoreSummary(5, 1, 1).Message);
     }
 }

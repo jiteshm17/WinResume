@@ -4,7 +4,40 @@ using static WinResume.Core.Native;
 
 namespace WinResume.Core;
 
-public sealed record RestoreResult(AppEntry App, bool Launched, bool Placed, string? Note);
+public sealed record RestoreResult(AppEntry App, bool Launched, bool Placed, string? Note)
+{
+    /// <summary>The app was launched but only part of it came back (for example not every Explorer tab).</summary>
+    public bool Partial { get; init; }
+}
+
+/// <summary>What a restore did, in numbers, for the log and for the notification shown to the user.</summary>
+public sealed record RestoreSummary(int Restored, int Skipped, int NeedAttention)
+{
+    public static RestoreSummary From(IEnumerable<RestoreResult> results)
+    {
+        int restored = 0, skipped = 0, attention = 0;
+        foreach (var r in results)
+        {
+            if (r.Partial || (!r.Launched && !Restore.IsSkippedOnPurpose(r.Note))) attention++;
+            else if (r.Launched) restored++;
+            else skipped++;
+        }
+        return new RestoreSummary(restored, skipped, attention);
+    }
+
+    public string LogLine => $"restore complete: {Restored} restored, {Skipped} skipped (already running or start themselves), {NeedAttention} need attention";
+
+    public string Message
+    {
+        get
+        {
+            var text = Restored == 1 ? "Restored 1 app." : $"Restored {Restored} apps.";
+            if (Skipped > 0) text += $" {Skipped} already running or starting by themselves.";
+            if (NeedAttention > 0) text += $" {NeedAttention} could not be fully restored; see the log in the data folder.";
+            return text;
+        }
+    }
+}
 
 public static class Restore
 {
@@ -44,10 +77,15 @@ public static class Restore
     {
         if (app.Kind is not (AppKind.Win32 or AppKind.Packaged) || app.ExePath.Length == 0) return null;
         // Windows starts these itself at sign-in, possibly a little later than now, so leave them alone.
-        if (startup is not null && StartupApps.StartsItself(app, startup)) return "Starts itself at sign-in";
-        if (runningExecutables.Contains(app.ExePath)) return "Already running";
+        if (startup is not null && StartupApps.StartsItself(app, startup)) return StartsItself;
+        if (runningExecutables.Contains(app.ExePath)) return AlreadyRunning;
         return null;
     }
+
+    const string StartsItself = "Starts itself at sign-in", AlreadyRunning = "Already running";
+
+    /// <summary>True for the skip reasons that mean nothing is missing, as opposed to a launch that failed.</summary>
+    public static bool IsSkippedOnPurpose(string? note) => note is StartsItself or AlreadyRunning;
 
     static HashSet<string> RunningExecutables()
     {
@@ -69,7 +107,7 @@ public static class Restore
             {
                 case AppKind.Explorer:
                     var ok = ExplorerTabs.Restore(app, log);
-                    return new RestoreResult(app, true, false, ok ? null : "Not every tab could be restored");
+                    return new RestoreResult(app, true, false, ok ? null : "Not every tab could be restored") { Partial = !ok };
 
                 case AppKind.Office:
                     // If the app is already running with some of the documents open, open only the rest;

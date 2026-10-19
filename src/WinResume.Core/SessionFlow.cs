@@ -7,10 +7,7 @@ namespace WinResume.Core;
 /// <summary>The two moments the app cares about: the session ending, and the next sign-in.</summary>
 public static class SessionFlow
 {
-    /// <summary>
-    /// Called while Windows is shutting down, restarting or signing out. Saves the session, in two steps so a
-    /// useful snapshot exists even if the slower Explorer tab reading is cut short.
-    /// </summary>
+    /// <summary>Called while Windows is shutting down, restarting or signing out. Saves the session.</summary>
     public static void CaptureForShutdown(Settings settings, TimeSpan budget, Action<string> log)
     {
         // Reading processes (WMI) and other apps' windows (UI Automation) does not work on a UI thread, so the
@@ -20,21 +17,16 @@ public static class SessionFlow
         {
             try
             {
-                var fast = Capture.TakeSnapshot(includeExplorer: false, includeTerminal: settings.RestoreTerminal);
-                SessionStore.Save(Without(fast, settings));
-                log($"saved fast snapshot: {fast.Apps.Count} apps, {fast.Terminal?.Tabs.Count ?? 0} terminal tabs, {watch.ElapsedMilliseconds} ms");
-
-                // Explorer tabs are read by selecting each tab, which takes a few seconds, so they come second.
-                var full = Capture.TakeSnapshot(includeExplorer: true, includeTerminal: settings.RestoreTerminal);
-                SessionStore.Save(Without(full, settings));
-                log($"saved full snapshot incl. Explorer: {full.Apps.Count} apps, {watch.ElapsedMilliseconds} ms total");
+                var snapshot = Capture.TakeSnapshot(includeExplorer: true, includeTerminal: settings.RestoreTerminal);
+                SessionStore.Save(Without(snapshot, settings));
+                log($"saved snapshot: {snapshot.Apps.Count} apps, {snapshot.Terminal?.Tabs.Count ?? 0} terminal tabs, {watch.ElapsedMilliseconds} ms");
             }
             catch (Exception e) { log("capture failed: " + e); }
         });
         worker.SetApartmentState(ApartmentState.MTA);
         worker.IsBackground = true;
         worker.Start();
-        if (!worker.Join(budget)) log($"capture still running after {budget.TotalSeconds:0.#} s; continuing with what is saved");
+        if (!worker.Join(budget)) log($"capture still running after {budget.TotalSeconds:0.#} s; nothing saved yet");
     }
 
     static Snapshot Without(Snapshot snapshot, Settings settings) =>
@@ -52,7 +44,7 @@ public static class SessionFlow
     }
 
     /// <summary>Brings the saved session back, then deletes it.</summary>
-    public static void RestoreSession(Snapshot snapshot, Settings settings, Action<string> log)
+    public static RestoreSummary RestoreSession(Snapshot snapshot, Settings settings, Action<string> log)
     {
         // Windows Terminal restores its own windows and scrollback; before it starts, put the folders and
         // environments it does not know about into its saved layout, then start it.
@@ -74,10 +66,14 @@ public static class SessionFlow
         }
 
         var apps = snapshot with { Apps = snapshot.Apps.Where(a => !IsExcluded(a, settings)).ToList() };
-        foreach (var result in Restore.RestoreAll(apps, TimeSpan.FromMilliseconds(500), log))
+        var results = Restore.RestoreAll(apps, TimeSpan.FromMilliseconds(500), log);
+        foreach (var result in results)
             log($"{(result.Launched ? "restored" : "skipped ")} {result.App.Kind,-9} {Path.GetFileName(result.App.ExePath),-22} {result.Note}");
 
         SessionStore.Delete();
+        var summary = RestoreSummary.From(results);
+        log(summary.LogLine);
         log("session restored and deleted");
+        return summary;
     }
 }

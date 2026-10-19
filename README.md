@@ -47,12 +47,15 @@ Download the newer zip, exit WinResume from the tray menu, and replace the exe.
 | Any ordinary desktop app | relaunched with the same arguments and window position |
 | Chrome / Edge | each open profile reopens, with its own tabs (the browser restores them) |
 | Word, Excel, PowerPoint | the exact documents that were open |
-| File Explorer | every window with all of its tabs and folders |
+| File Explorer | every window with all of its tabs and folders (read quietly at shutdown: no tab switching, no flicker) |
 | Store apps | launched by package id |
 | Windows Terminal | tabs in their folders with Python virtual environments activated; scrollback is restored by Windows Terminal itself |
 
 Apps that Windows already starts for you at sign-in (the Startup apps list, including the Task Manager on/off
 switch) are left alone, as are apps that are already running.
+
+When it has finished, a tray notification tells you how many apps came back (for example "Restored 8 apps. 2 already
+running or starting by themselves.") and the same summary is written to the log.
 
 **Tip:** turn off *Settings > Accounts > Sign-in options > "Automatically save my restartable apps and restart them
 when I sign back in"*. Windows' own restore overlaps with this app for Chrome and Explorer.
@@ -115,13 +118,34 @@ version, releases are marked **pre-release**.
   in those two fields in Windows Terminal's saved layout before it starts.
 - `WinResume.App` has an invisible window that receives the shutdown message (`WM_QUERYENDSESSION`).
 
+## Troubleshooting
+
+If something did not come back, the log says why. Open it from the tray menu (**Open data folder**, then `log.txt`), or
+send that file to whoever is helping you. It contains one timestamped line per step and no window titles: when the
+session ended and how long saving took, whether a saved session was found at sign-in, each app as restored or skipped
+(with the reason), and a final line such as `restore complete: 8 restored, 2 skipped (...), 0 need attention`.
+
+Everything WinResume writes is in `%LocalAppData%\WinResume`:
+
+| File | What it is |
+|---|---|
+| `log.txt` | the log described above |
+| `last-session.json` | the saved session; exists only between a shutdown and the next restore |
+| `settings.json` | pause, terminal switch, excluded apps |
+
+Windows Terminal's saved layout (`%LocalAppData%\Packages\Microsoft.WindowsTerminal_*\LocalState\state.json`) is patched
+when terminals are restored; `state.json.winresume-backup` next to it is the copy from before the last patch. The
+"Start with Windows" entry is the `WinResume` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+
+**Testing a restart yourself.** Run `scripts\baseline-before-restart.ps1` before restarting. After signing in and
+answering the prompt, wait about a minute and run `scripts\verify-after-restart.ps1`; it prints the end of the log and
+compares what is open with the baseline.
+
 ## Known gaps
 
 - Running programs are not restarted (a tab's last command is put in history so the up arrow recalls it).
 - Windows Terminal tabs running plain PowerShell report their start folder; an optional prompt hook
   (`scripts/terminal-prompt-hook.ps1`) gives the exact one.
-- Reading Explorer's tabs briefly flicks through them at shutdown, and under a real shutdown it can run out of
-  time (Windows gives apps only a few seconds).
 - Apps that start themselves minimised to the tray (such as WhatsApp or Wispr Flow) come back in the tray, not as a
   visible window.
 - Apps running as administrator can't be inspected or restored.

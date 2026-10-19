@@ -63,7 +63,12 @@ sealed class TrayApp : IDisposable
         // Restoring drives other apps' windows, so keep it off the UI thread.
         Task.Run(() =>
         {
-            try { SessionFlow.RestoreSession(snapshot, SessionStore.LoadSettings(), SessionStore.Log); }
+            try
+            {
+                var summary = SessionFlow.RestoreSession(snapshot, SessionStore.LoadSettings(), SessionStore.Log);
+                window.BeginInvoke(() => icon.ShowBalloonTip(8000, "WinResume", summary.Message,
+                    summary.NeedAttention > 0 ? ToolTipIcon.Warning : ToolTipIcon.Info));
+            }
             catch (Exception e) { SessionStore.Log("restore failed: " + e); }
         });
     }
