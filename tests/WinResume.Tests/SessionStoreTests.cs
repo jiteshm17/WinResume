@@ -89,6 +89,59 @@ public class SessionStoreTests : IDisposable
     }
 
     [Fact]
+    public void Autosave_is_off_by_default_and_defaults_to_one_minute()
+    {
+        var s = SessionStore.LoadSettings();
+        Assert.False(s.AutoSave);
+        Assert.Equal(1, s.AutoSaveMinutes);
+    }
+
+    [Fact]
+    public void Autosave_is_loaded_when_there_is_no_shutdown_session()
+    {
+        Assert.True(SessionStore.SaveAutosave(Sample()));
+        Assert.True(SessionStore.HasSession);
+        Assert.Equal("app.exe", Path.GetFileName(SessionStore.Load()!.Apps[0].ExePath));
+        Assert.DoesNotContain("Secret chat", File.ReadAllText(SessionStore.AutosaveFile));
+    }
+
+    [Fact]
+    public void Autosave_skips_the_write_when_nothing_changed()
+    {
+        Assert.True(SessionStore.SaveAutosave(Sample()));
+        var written = File.GetLastWriteTimeUtc(SessionStore.AutosaveFile);
+        Assert.False(SessionStore.SaveAutosave(Sample() with { TakenAtUtc = DateTime.UtcNow.AddMinutes(1) }));
+        Assert.Equal(written, File.GetLastWriteTimeUtc(SessionStore.AutosaveFile));
+        Assert.True(SessionStore.SaveAutosave(new Snapshot()));
+    }
+
+    [Fact]
+    public void Autosave_is_rewritten_if_the_file_was_deleted()
+    {
+        SessionStore.SaveAutosave(Sample());
+        File.Delete(SessionStore.AutosaveFile);
+        Assert.True(SessionStore.SaveAutosave(Sample()));
+    }
+
+    [Fact]
+    public void Shutdown_session_wins_over_autosave_and_removes_it()
+    {
+        SessionStore.SaveAutosave(Sample());
+        SessionStore.Save(new Snapshot());
+        Assert.False(File.Exists(SessionStore.AutosaveFile));
+        Assert.Empty(SessionStore.Load()!.Apps);
+    }
+
+    [Fact]
+    public void Delete_removes_the_autosave_too()
+    {
+        SessionStore.SaveAutosave(Sample());
+        SessionStore.Delete();
+        Assert.False(SessionStore.HasSession);
+        Assert.Null(SessionStore.Load());
+    }
+
+    [Fact]
     public void Describe_mentions_terminal_tabs_only_when_there_are_some()
     {
         Assert.Equal("1 apps and 1 terminal tabs", SessionFlow.Describe(Sample()));

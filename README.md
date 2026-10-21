@@ -66,13 +66,19 @@ when I sign back in"*. Windows' own restore overlaps with this app for Chrome an
 | Restore last session now | restores the saved session without waiting for sign-in |
 | Pause (save nothing at shutdown) | stops saving anything |
 | Include Windows Terminal tabs | on by default; untick to leave terminals alone |
+| Crash protection (save every few minutes) | off by default; also saves in the background so a power cut loses at most that much (see Privacy) |
 | Start with Windows | adds or removes the per-user startup entry |
 | Open data folder | opens `%LocalAppData%\WinResume` |
 | Exit | quits the app |
 
 ## Privacy
 
-- Nothing is captured while you work. The only trigger is Windows telling the app the session is ending.
+- Nothing is captured while you work. The only trigger is Windows telling the app the session is ending, unless you
+  turn on **Crash protection**.
+- **Crash protection** (off by default) also saves the open apps every `AutoSaveMinutes` minutes (set in
+  `settings.json`, default 1) to `autosave.json`, so after a power cut there is something to restore. It is only
+  rewritten when something changed, has no window titles, and is deleted by a normal shutdown save, by Pause, by
+  turning the option off and by Exit.
 - One file, `%LocalAppData%\WinResume\last-session.json`, holds the latest session. It has no window titles and is
   deleted once restored (or if you decline, or if the shutdown is cancelled).
 - Nothing is sent anywhere. There is no network code. The source is all here to check.
@@ -132,7 +138,8 @@ Everything WinResume writes is in `%LocalAppData%\WinResume`:
 |---|---|
 | `log.txt` | the log described above |
 | `last-session.json` | the saved session; exists only between a shutdown and the next restore |
-| `settings.json` | pause, terminal switch, excluded apps |
+| `autosave.json` | crash protection only: the latest background save, used if there is no `last-session.json` |
+| `settings.json` | pause, terminal switch, crash protection and its interval, excluded apps |
 
 Windows Terminal's saved layout (`%LocalAppData%\Packages\Microsoft.WindowsTerminal_*\LocalState\state.json`) is patched
 when terminals are restored; `state.json.winresume-backup` next to it is the copy from before the last patch. The

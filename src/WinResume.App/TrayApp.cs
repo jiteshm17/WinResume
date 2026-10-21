@@ -15,6 +15,9 @@ sealed class TrayApp : IDisposable
     readonly NotifyIcon icon;
     readonly ShutdownWindow window;
     readonly System.Windows.Forms.Timer signInTimer;
+    readonly System.Windows.Forms.Timer autoSaveTimer = new();
+    // Until the saved session from last time has been restored or declined, an autosave would overwrite it.
+    bool sessionPending;
 
     public TrayApp()
     {
@@ -23,16 +26,31 @@ sealed class TrayApp : IDisposable
         var menu = new ContextMenuStrip();
         menu.Items.Add("Restore last session now", null, (_, _) => AskAndRestore(askFirst: false));
         var pause = new ToolStripMenuItem("Pause (save nothing at shutdown)") { Checked = SessionStore.LoadSettings().Paused, CheckOnClick = true };
-        pause.CheckedChanged += (_, _) => SessionStore.SaveSettings(SessionStore.LoadSettings() with { Paused = pause.Checked });
+        pause.CheckedChanged += (_, _) =>
+        {
+            SessionStore.SaveSettings(SessionStore.LoadSettings() with { Paused = pause.Checked });
+            ApplyAutoSave();
+        };
         menu.Items.Add(pause);
         var terminal = new ToolStripMenuItem("Include Windows Terminal tabs") { Checked = SessionStore.LoadSettings().RestoreTerminal, CheckOnClick = true };
         terminal.CheckedChanged += (_, _) => SessionStore.SaveSettings(SessionStore.LoadSettings() with { RestoreTerminal = terminal.Checked });
         menu.Items.Add(terminal);
+        var autoSave = new ToolStripMenuItem("Crash protection (save every few minutes)") { Checked = SessionStore.LoadSettings().AutoSave, CheckOnClick = true };
+        autoSave.CheckedChanged += (_, _) =>
+        {
+            SessionStore.SaveSettings(SessionStore.LoadSettings() with { AutoSave = autoSave.Checked });
+            ApplyAutoSave();
+        };
+        menu.Items.Add(autoSave);
         var autostart = new ToolStripMenuItem("Start with Windows") { Checked = IsAutostart(), CheckOnClick = true };
         autostart.CheckedChanged += (_, _) => SetAutostart(autostart.Checked);
         menu.Items.Add(autostart);
         menu.Items.Add("Open data folder", null, (_, _) => System.Diagnostics.Process.Start("explorer.exe", SessionStore.Folder));
-        menu.Items.Add("Exit", null, (_, _) => Application.Exit());
+        menu.Items.Add("Exit", null, (_, _) =>
+        {
+            SessionStore.DeleteAutosave(); // quitting on purpose: a leftover autosave would be offered as a crash recovery
+            Application.Exit();
+        });
 
         icon = new NotifyIcon { Icon = SystemIcons.Application, Text = "WinResume", ContextMenuStrip = menu, Visible = true };
 
@@ -41,7 +59,43 @@ sealed class TrayApp : IDisposable
         signInTimer.Tick += (_, _) => { signInTimer.Stop(); AskAndRestore(askFirst: true); };
         var saved = SessionStore.Load();
         SessionStore.Log(saved is null ? "started; no saved session" : $"started; saved session found: {SessionFlow.Describe(saved)}");
-        if (saved is not null) signInTimer.Start();
+        if (saved is not null) { sessionPending = true; signInTimer.Start(); }
+
+        autoSaveTimer.Tick += (_, _) => AutoSaveTick();
+        ApplyAutoSave();
+    }
+
+    /// <summary>Starts or stops the background save to match the settings (and re-reads the interval).</summary>
+    void ApplyAutoSave()
+    {
+        var settings = SessionStore.LoadSettings();
+        if (!settings.AutoSave || settings.Paused)
+        {
+            autoSaveTimer.Stop();
+            if (!sessionPending) SessionStore.DeleteAutosave(); // off or paused means nothing should stay recorded
+            return;
+        }
+        autoSaveTimer.Interval = Math.Max(1, settings.AutoSaveMinutes) * 60_000;
+        if (!sessionPending && !autoSaveTimer.Enabled)
+        {
+            autoSaveTimer.Start();
+            SessionStore.Log($"crash protection on: saving every {settings.AutoSaveMinutes} min");
+        }
+    }
+
+    void AutoSaveTick()
+    {
+        var settings = SessionStore.LoadSettings();
+        autoSaveTimer.Interval = Math.Max(1, settings.AutoSaveMinutes) * 60_000;
+        if (!settings.AutoSave || settings.Paused) return;
+        Task.Run(() => SessionFlow.AutoSave(settings, SessionStore.Log)); // MTA thread pool, off the UI thread
+    }
+
+    /// <summary>The saved session has been dealt with, so background saving may begin.</summary>
+    void SessionHandled()
+    {
+        sessionPending = false;
+        ApplyAutoSave();
     }
 
     void AskAndRestore(bool askFirst)
@@ -49,6 +103,7 @@ sealed class TrayApp : IDisposable
         var snapshot = SessionStore.Load();
         if (snapshot is null)
         {
+            SessionHandled();
             if (!askFirst) MessageBox.Show("There is no saved session.", "WinResume");
             return;
         }
@@ -58,7 +113,7 @@ sealed class TrayApp : IDisposable
             var answer = MessageBox.Show(
                 $"Restore {SessionFlow.Describe(snapshot)} from before you shut down?",
                 "WinResume", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-            if (answer != DialogResult.Yes) { SessionStore.Delete(); SessionStore.Log("restore declined; session deleted"); return; }
+            if (answer != DialogResult.Yes) { SessionStore.Delete(); SessionStore.Log("restore declined; session deleted"); SessionHandled(); return; }
         }
         // Restoring drives other apps' windows, so keep it off the UI thread.
         Task.Run(() =>
@@ -67,9 +122,13 @@ sealed class TrayApp : IDisposable
             {
                 var summary = SessionFlow.RestoreSession(snapshot, SessionStore.LoadSettings(), SessionStore.Log);
                 // a dialog like the restore prompt, so it stays until read (a tray balloon can vanish or be suppressed)
-                window.BeginInvoke(() => ShowSummary(summary));
+                window.BeginInvoke(() => { SessionHandled(); ShowSummary(summary); });
             }
-            catch (Exception e) { SessionStore.Log("restore failed: " + e); }
+            catch (Exception e)
+            {
+                SessionStore.Log("restore failed: " + e);
+                window.BeginInvoke(SessionHandled);
+            }
         });
     }
 
@@ -105,6 +164,7 @@ sealed class TrayApp : IDisposable
         icon.Visible = false;
         icon.Dispose();
         signInTimer.Dispose();
+        autoSaveTimer.Dispose();
         window.Dispose();
     }
 }
@@ -136,6 +196,7 @@ sealed class ShutdownWindow : Form
         {
             // another app cancelled the shutdown: nothing is ending, so the snapshot would be stale
             SessionStore.Delete();
+            SessionFlow.ShutdownCancelled();
             SessionStore.Log("shutdown was cancelled; snapshot deleted");
         }
         base.WndProc(ref m);
@@ -145,7 +206,7 @@ sealed class ShutdownWindow : Form
     {
         var settings = SessionStore.LoadSettings();
         SessionStore.Log($"session ending (flags 0x{flags:X}); paused={settings.Paused}");
-        if (settings.Paused) return;
+        if (settings.Paused) { SessionStore.DeleteAutosave(); return; }
 
         // Tell Windows we are busy for a moment so it shows a reason instead of closing everything underneath us.
         NativeMethods.ShutdownBlockReasonCreate(Program_Handle(), "Saving your open apps so they can be restored");
