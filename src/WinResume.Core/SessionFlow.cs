@@ -7,9 +7,51 @@ namespace WinResume.Core;
 /// <summary>The two moments the app cares about: the session ending, and the next sign-in.</summary>
 public static class SessionFlow
 {
+    static volatile bool shuttingDown;
+    static readonly object autoSaveLock = new();
+    static bool loggedFirstAutoSave;
+
+    /// <summary>
+    /// Crash protection: one background save of the open apps, called by the timer. Runs at lower priority, skips
+    /// the write when nothing changed, and never overlaps itself or the shutdown capture. Quiet in the log except
+    /// for the first save, failures and slow captures.
+    /// </summary>
+    public static void AutoSave(Settings settings, Action<string> log)
+    {
+        if (shuttingDown || !Monitor.TryEnter(autoSaveLock)) return;
+        try
+        {
+            var watch = Stopwatch.StartNew();
+            var worker = new Thread(() =>
+            {
+                try
+                {
+                    var snapshot = Capture.TakeSnapshot(includeExplorer: true, includeTerminal: settings.RestoreTerminal);
+                    snapshot = Without(snapshot, settings);
+                    if (shuttingDown) return;
+                    var wrote = SessionStore.SaveAutosave(snapshot);
+                    if (watch.ElapsedMilliseconds > 2000 || (wrote && !loggedFirstAutoSave))
+                        log($"autosave: {snapshot.Apps.Count} apps, {watch.ElapsedMilliseconds} ms{(wrote ? "" : " (unchanged)")}");
+                    if (wrote) loggedFirstAutoSave = true;
+                }
+                catch (Exception e) { log("autosave failed: " + e); }
+            });
+            worker.SetApartmentState(ApartmentState.MTA); // WMI and UI Automation need this
+            worker.IsBackground = true;
+            worker.Priority = ThreadPriority.BelowNormal;
+            worker.Start();
+            worker.Join();
+        }
+        finally { Monitor.Exit(autoSaveLock); }
+    }
+
+    /// <summary>The shutdown was cancelled by another app, so background saves may carry on.</summary>
+    public static void ShutdownCancelled() => shuttingDown = false;
+
     /// <summary>Called while Windows is shutting down, restarting or signing out. Saves the session.</summary>
     public static void CaptureForShutdown(Settings settings, TimeSpan budget, Action<string> log)
     {
+        shuttingDown = true; // an autosave in flight must not race the final save
         // Reading processes (WMI) and other apps' windows (UI Automation) does not work on a UI thread, so the
         // whole capture runs on a background thread while the caller waits at most `budget`.
         var watch = Stopwatch.StartNew();
