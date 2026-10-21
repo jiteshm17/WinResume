@@ -31,12 +31,14 @@ public static class CommandHistory
     /// <summary>
     /// PowerShell code that appends a line to the PSReadLine history file, which PSReadLine loads when the prompt
     /// starts, so the up arrow recalls it. (PSReadLine's AddToHistory cannot be used here: it fails until the first
-    /// prompt.) The line is not run, and it is skipped if it is already the newest entry.
+    /// prompt.) The line is not run, and it is skipped if it is already the newest entry. Tabs restored together
+    /// share this file with PSReadLine, so the write is a single open-append-close call to keep the file locked
+    /// for as short a time as possible (a longer hold made PSReadLine print "file is being used by another process").
     /// </summary>
     public static string AddToHistoryScript(string command)
     {
         var quoted = "'" + command.Replace("'", "''") + "'";
         return "try { $h = (Get-PSReadLineOption).HistorySavePath; " +
-               $"if ((Get-Content -LiteralPath $h -Tail 1 -ErrorAction SilentlyContinue) -ne {quoted}) {{ Add-Content -LiteralPath $h -Value {quoted} }} }} catch {{ }}";
+               $"if ((Get-Content -LiteralPath $h -Tail 1 -ErrorAction SilentlyContinue) -ne {quoted}) {{ [System.IO.File]::AppendAllText($h, {quoted} + [Environment]::NewLine) }} }} catch {{ }}";
     }
 }
